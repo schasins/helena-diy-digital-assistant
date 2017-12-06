@@ -198,6 +198,17 @@ var RecorderUI = (function (pub) {
     var prog = pub.currentHelenaProgram;
     var div = $("#new_script_content");
     var name = div.find("#program_name").get(0).value;
+    prog.setName(name);
+    var triggerPhraseInputNode = div.find("#trigger_phrase").get(0)
+    if (triggerPhraseInputNode.value === triggerPhraseInputNode.defaultValue){
+      // it's all well and good to have the default program name, since that doesn't matter
+      // but you really need to have a good trigger phrase
+      pub.addDialog("Need a real prompt!", 
+        "We can't save the program until you enter a prompt (in Step 2) -- sorry!", 
+        {"OK":function(){}});
+      return
+    }
+    prog.setAssociatedString(triggerPhraseInputNode.value);
 
     // ok, time to call the func that actually interacts with the server
     // saveToServer(progName, postIdRetrievalContinuation, saveStartedHandler, saveCompletedHandler)
@@ -213,7 +224,7 @@ var RecorderUI = (function (pub) {
       status.html("Saved");
     };
 
-    prog.saveToServer(name, postIdRetrievalContinuation, saveStartedHandler, saveCompletedHandler);
+    prog.saveToServer(postIdRetrievalContinuation, saveStartedHandler, saveCompletedHandler);
   };
 
   pub.replayOriginal = function _replayOriginal(){
@@ -794,7 +805,7 @@ var RecorderUI = (function (pub) {
       WALconsole.log(response);
       var arrayOfArrays = _.map(response, function(prog){
         var date = $.format.date(prog.date * 1000, "dd/MM/yyyy HH:mm")
-        return [prog.name, date];});
+        return [prog.name, prog.associated_string, date];});
       var html = DOMCreationUtilities.arrayOfArraysToTable(arrayOfArrays);
       var trs = html.find("tr");
       for (var i = 0; i < trs.length; i++){
