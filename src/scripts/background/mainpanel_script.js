@@ -9,7 +9,7 @@ var RecorderUI = (function (pub) {
   pub.tabs = null;
   var ringerUseXpathFastMode = false;
   var demoMode = true;
-
+  var runObject = null;
 
   /**********************************************************************
    * We'll do a little setup and then we'll dig in on the real content
@@ -47,16 +47,12 @@ var RecorderUI = (function (pub) {
     var tabsDivs = $("#tabs");
     pub.tabs = tabsDivs.tabs();
 
-    var div = $("#new_script_content");
-    DOMCreationUtilities.replaceContent(div, $("#about_to_record"));
-    div.find("#start_recording").click(RecorderUI.startRecording);
+    pub.showProgramPreview();
+    
     // if we switch to the second tab, we'll need to load in all the saved scripts
     $( "#tabs" ).on( "tabsbeforeactivate", function( event, ui ) {
       if (ui.newPanel.attr('id') === "tabs-2"){
         pub.loadSavedScripts();
-      }
-      if (ui.newPanel.attr('id') === "tabs-3"){
-        pub.loadScheduledScripts();
       }
     });
   };
@@ -110,8 +106,11 @@ var RecorderUI = (function (pub) {
   pub.showProgramPreview = function _showProgramPreview(inProgress){
     WALconsole.log("showProgramPreview");
     if (inProgress === undefined){ inProgress = false; }
+
     var div = $("#new_script_content");
     DOMCreationUtilities.replaceContent(div, $("#script_preview")); // let's put in the script_preview node
+
+    // unfortunately our replace content thing doesn't *immediately* replace content...
 
     // I like it when the run button just says "Run Script" for demos
     // nice to have a reminder that it saves stuff if we're not in demo mode, but it's prettier with just run
@@ -119,13 +118,20 @@ var RecorderUI = (function (pub) {
       div.find("#run").html("Run Script");
     }
 
+    activateButton(div, "#record_new_action", RecorderUI.startRecording);
+
     activateButton(div, "#run", RecorderUI.run);
-    activateButton(div, "#run_fast_mode", RecorderUI.runWithFastMode);
     activateButton(div, "#save", RecorderUI.save);
     activateButton(div, "#replay", RecorderUI.replayOriginal);
-    activateButton(div, "#schedule_later", RecorderUI.scheduleLater);
     activateButton(div, '#relation_upload', RecorderUI.uploadRelation);
     activateButton(div, '#relation_demonstration', RecorderUI.demonstrateRelation);
+
+    var reset = function(){
+      runObject.program.stopRunning(runObject);
+      div.find("#cancelRun").button("option", "disabled", true);
+    }
+    activateButton(div, "#cancelRun", reset);
+    div.find("#cancelRun").button("option", "disabled", true);
 
     // let's handle the collapsibles
     var tablesDiv = div.find("#relevant_tables_accordion");
@@ -162,8 +168,16 @@ var RecorderUI = (function (pub) {
     // first set the correct fast mode, which means setting it to false if we haven't gotten true passed in
     // might still be on from last time
 
+    if (!pub.currentHelenaProgram){
+      WALconsole.warn("Tried to run program before we have a program to run.");
+      return;
+    }
+
+    var div = $("#new_script_content");
+    div.find("#cancelRun").button("option", "disabled", false); // shouldn't be able to do these before we even run
+
     // trying something new.  have running just always save the thing.  otherwise, it's so unpredictable
-    RecorderUI.save(function(progId){
+    pub.save(function(progId){
       // ok good, now we have a program id (already set in pub.currentHelenaProgram.id)
       ringerUseXpathFastMode = fastMode;
       // run whichever program is currently being displayed (so pub.currentHelenaProgram)
@@ -173,36 +187,10 @@ var RecorderUI = (function (pub) {
 
   var scriptRunCounter = 0;
 
-  pub.newRunTab = function _newRunTab(runObject){
-    // first let's make the new tab
-    scriptRunCounter += 1;
-    var tabDivId = 'runTab' + scriptRunCounter;
-    var ul = pub.tabs.find( "ul" );
-    $( "<li><a href='#" + tabDivId + "'>Script Run "+ scriptRunCounter + "</a></li>" ).appendTo( ul );
-    $( "<div id='" + tabDivId + "'><div id='running_script_content'></div></div>" ).appendTo( pub.tabs );
-    pub.tabs.tabs( "refresh" );
-    pub.tabs.tabs( "option", "active", scriptRunCounter + 2 );
-
-    // update the panel to show pause, resume buttons
-    WALconsole.log("UI newRunTab");
-    var div = $("#" + tabDivId).find("#running_script_content");
-    DOMCreationUtilities.replaceContent(div, $("#script_running"));
-
-    activateButton(div, "#pause", function(){RecorderUI.pauseRun(runObject);});
-    activateButton(div, "#resume", function(){RecorderUI.resumeRun(runObject);});
-    activateButton(div, "#restart", function(){RecorderUI.restartRun(runObject);});
-    div.find("#resume").button("option", "disabled", true); // shouldn't be able to resume before we even pause
-
-    activateButton(div, "#download", function(){runObject.dataset.downloadDataset();});
-    activateButton(div, "#download_all", function(){runObject.dataset.downloadFullDataset();});
-
-    var reset = function(){
-      runObject.program.stopRunning(runObject);
-      // todo: maybe have this close the tab or swap us back to the program preview
-    }
-    activateButton(div, "#cancelRun", reset);
-
-    return tabDivId;
+  pub.newRunTab = function _newRunTab(rObj){
+    // we don't want to show anything new when we do a new run
+    // but we do want to save this runObject so we can pause and cancel the run, all that jaz
+    runObject = rObj;
   };
 
   // for saving a program to the server
@@ -230,30 +218,6 @@ var RecorderUI = (function (pub) {
 
   pub.replayOriginal = function _replayOriginal(){
     pub.currentHelenaProgram.replayOriginal();
-  };
-
-  pub.pauseRun = function _pauseRun(runObject){
-    WALconsole.log("Setting pause flag.");
-    runObject.userPaused = true; // next runbasicblock call will handle saving a continuation
-    var div = $("#" + runObject.tab).find("#running_script_content");
-    div.find("#pause").button("option", "disabled", true); // can't pause while we're paused
-    div.find("#resume").button("option", "disabled", false); // can now resume
-  };
-
-  pub.resumeRun = function _resumeRun(runObject){
-    runObject.userPaused = false;
-    var div = $("#" + runObject.tab).find("#running_script_content");
-    div.find("#pause").button("option", "disabled", false);
-    div.find("#resume").button("option", "disabled", true);
-    runObject.resumeContinuation();
-  };
-
-  pub.restartRun = function _restartRun(runObject){
-    WALconsole.log("Restarting.");
-    var div = $("#" + runObject.tab).find("#running_script_content");
-    div.find("#pause").button("option", "disabled", false);
-    div.find("#resume").button("option", "disabled", true);
-    runObject.program.restartFromBeginning(runObject);
   };
 
   // during recording, when user scrapes, show the text so user gets feedback on what's happening
@@ -330,6 +294,11 @@ var RecorderUI = (function (pub) {
   pub.updateDisplayedRelations = function _updateDisplayedRelations(currentlyUpdating){
     WALconsole.log("updateDisplayedRelation");
     if (currentlyUpdating === undefined){ currentlyUpdating = false; }
+
+    if (!pub.currentHelenaProgram){
+      WALconsole.warn("Tried to call updateDisplayedRelations before setting pub.currentHelenaProgram.");
+      return;
+    }
 
     var relationObjects = pub.currentHelenaProgram.relations;
     var $div = $("#new_script_content").find("#status_message");
@@ -570,13 +539,19 @@ var RecorderUI = (function (pub) {
     // we also want to make sure the user can tell us which features are required for each node that we find using similarity approach
     pub.updateNodeRequiredFeaturesUI();
 
-    if (program.name){
+    if (program && program.name){
       $("#new_script_content").find("#program_name").get(0).value = program.name;
     }
   };
 
   pub.updateDuplicateDetection = function _updateDuplicateDetection(){
     WALconsole.log("updateDuplicateDetection");
+
+    if (!pub.currentHelenaProgram){
+      WALconsole.warn("Tried to display duplicate detection data before setting pub.currentHelenaProgram.");
+      return;
+    }
+
     var duplicateDetectionData = pub.currentHelenaProgram.getDuplicateDetectionData();
 
     var $div = $("#new_script_content").find("#duplicates_container_content");
@@ -661,6 +636,12 @@ var RecorderUI = (function (pub) {
 
   pub.updateNodeRequiredFeaturesUI = function _updateNodeRequiredFeaturesUI(){
     WALconsole.log("updateNodeRequiredFeaturesUI");
+
+    if (!pub.currentHelenaProgram){
+      WALconsole.warn("Tried to call updateNodeRequiredFeaturesUI before setting pub.currentHelenaProgram.");
+      return;
+    }
+
     var similarityNodes = pub.currentHelenaProgram.getNodesFoundWithSimilarity();
 
     var $div = $("#new_script_content").find("#require_features_container_content");
@@ -736,21 +717,6 @@ var RecorderUI = (function (pub) {
       $div.html("All of this script's cells come from tables.  If you're not happy with the table cells, you might try using the `Edit This Table' buttons above.");
     }
 
-  };
-
-  pub.addNewRowToOutput = function _addNewRowToOutput(runTabId, listOfCellTexts){
-    var div = $("#" + runTabId).find("#running_script_content").find("#output_preview").find("table").find("tbody");
-    var l = div.children().length;
-    var limit = 100;
-    if (l === limit){
-      if ($("#" + runTabId).find("#running_script_content").find("#output_preview").find("#data_too_big").length === 0){
-        $("#" + runTabId).find("#running_script_content").find("#output_preview").append($("<div id='data_too_big'>This dataset is too big for us to display.  The preview here shows the first "+limit+" rows.  To see the whole dataset, just click the download button above.</div>"));  
-      }
-    }
-    else if (l < limit){
-      WALconsole.log("adding output row: ", l);
-      div.append(DOMCreationUtilities.arrayOfTextsToTableRow(listOfCellTexts));
-    }
   };
 
   var currentUploadRelation = null;

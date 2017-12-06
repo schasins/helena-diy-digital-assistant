@@ -37,8 +37,8 @@ h4 {
 	clear:both;
 	padding-top: 10px;
 }
-#run{
-	width: 100%;
+.control_button{
+	display: inline-block;
 }
 .top_button{
 	width: 49%;
@@ -223,4 +223,13 @@ h4 {
 
 .node_prop_val{
 	background-color: #F0EBE1;
+}
+
+.step_title{
+	font-weight: bold;
+	font-size: 14px;
+}
+.step_box{
+	padding-top:0px;
+	padding-bottom:20px;
 }

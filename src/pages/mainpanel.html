@@ -94,32 +94,35 @@
 
 			<div id="script_preview" class="new_script_message_stage">
 
-				<button id="run">Save and Run Script</button>
-				<div>
-				     <span style="float:right; padding-top:5px; padding-left: 5px; display:none" id="program_save_status"></span>
-				     <button id="save" style="float:right">Save Script</button>
-				     <span style="display: block; overflow:hidden; padding-right:2px">
-				     	<input type="text" id="program_name" value="program_name" style="width:100%; height:26px;"/>
-				     </span>
-				</div>
+				<div class="step_box">
+					<div class="step_title">Step 1: The prompt</div>
+					What will you say when you want Helena to run this action?  Use curly braces for variables (ex: "How long is the walk from {location1} to {location2}?").  If there are options for what you'll say, use square brackets outside all the options and use slashes between the options (ex: "What are the seasonal [flavors/ice creams] at Lush?").
 
-				<div id="extra_run_options_accordion">
-					<h3>Additional Run Options</h3>
-					<div>
-						<button id="replay">Replay Original Recorded Script</button> (for testing)
+					<div id="trigger_phrase" style="padding-top: 10px">
+						What will you say to trigger this interaction?
+						<div>
+						<span style="float:left; padding-top:6px">Helena,</span> 
+						<span style="display: block; overflow:hidden; padding-left:2px">
+							<input type="text" id="trigger_phrase" value="Ex: what are the seasonal cupcakes at Cupcake Royale?" style="width:100%; height:26px;"/>
+						</span>
+						</div>
 					</div>
 				</div>
 
-				<div class="container" id="program_representation"></div>
-				
-				<div id="trigger_phrase" style="padding-top: 30px; padding-bottom: 20px">
-					What will you say to trigger this interaction?
-					<div>
-					<span style="float:left; padding-top:6px">Helena,</span> 
-					<span style="display: block; overflow:hidden; padding-left:2px">
-						<input type="text" id="trigger_phrase" value="Ex: what are the seasonal cupcakes at Cupcake Royale?" style="width:100%; height:26px;"/>
-					</span>
-					</div>
+				<div class="step_box">
+					<div class="step_title">Step 2: The web interaction</div>
+					Click 'Record a New Action' below to show Helena what to do when you say your prompt.  For example, if it should load your Facebook page and grab information about the next event you're attending, do that.  If you're just making an 'Easter egg,' you can skip this step.
+					<button id="record_new_action">Record a New Action</button>
+				</div>
+
+				<div class="step_box">
+					<div class="step_title">Step 3: Helena's response</div>
+					Click 'other' in the toolbox at the left of the workspace below, then drag 'say' statements into your action to represent what Helena should say in response to your prompt.
+				</div>
+
+				<div class="step_box">
+					<div class="step_title">Step 4: Save</div>
+					Give your new action a name and click the 'Save Script' button!
 				</div>
 
 				<div id="blockly_area"></div>
@@ -128,6 +131,20 @@
 					<category name="web"></category>
 					<category name="other"></category>
 				</xml>
+
+				<div>
+					<div>
+					     <span style="float:right; padding-top:5px; padding-left: 5px; display:none" id="program_save_status"></span>
+					     <button id="save" style="float:right">Save Script</button>
+					     <span style="display: block; overflow:hidden; padding-right:2px">
+					     	<input type="text" id="program_name" value="program_name" style="width:100%; height:26px;"/>
+					     </span>
+					</div>
+					<div>
+						<button id="run" class="control_button">Run Script</button>
+						<button id="cancelRun" class="control_button">Cancel Script Run</button>
+					</div>
+				</div>
 
 				<div id="relevant_tables_accordion">
 					<h3>Relevant Tables</h3>
@@ -167,22 +184,6 @@
 					</div>
 				</div>
 
-			</div>
-
-			<div id="script_running" class="new_script_message_stage">
-				<div>
-					<button id="pause">Pause Script</button> 
-					<button id="resume">Resume Script</button>
-					<button id="restart">Restart From Beginning</button>
-					<button id="cancelRun">Cancel Script Run</button>
-				</div>
-				<div>
-					<button id="download">Download Data (This Scrape)</button> 
-					<button id="download_all">Download Data (All Scrapes)</button> 
-					Note that the downloaded dataset may be slightly out of date if we haven't saved all the data yet.
-					<div>Rows so far: <span id=rows_so_far>0</span></div>
-				</div>
-				<div id="output_preview"><table><tbody></tbody></table></div>
 			</div>
 
 			<div id="relation_editing" class="new_script_message_stage">
