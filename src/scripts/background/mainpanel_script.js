@@ -847,6 +847,10 @@ var RecorderUI = (function (pub) {
   return pub;
 }(HelenaUIBase));
 
+// if we want a tool to only pull down programs made from within the same tool, we should give the tool a unique tool id
+WebAutomationLanguage.setHelenaToolId(2);
 // the RecorderUI is the UI object that will show Helena programs, so certain edits to the programs
 // are allowed to call UI hooks that make the UI respond to program changes
 WebAutomationLanguage.setUIObject(RecorderUI);
+
+console.log("Completed mainpanel setup.");
