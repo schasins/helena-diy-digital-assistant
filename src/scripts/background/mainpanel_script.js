@@ -4,12 +4,17 @@
  * Guide the user through making a demonstration recording
  **********************************************************************/
 
+ function pretendToHear(str){
+   RecorderUI.hear(str);
+ }
+
 // this inherits from HelenaUIBase
 var RecorderUI = (function (pub) {
   pub.tabs = null;
   var ringerUseXpathFastMode = false;
   var demoMode = true;
   var runObject = null;
+  pub.listen = true;
 
   /**********************************************************************
    * We'll do a little setup and then we'll dig in on the real content
@@ -34,6 +39,28 @@ var RecorderUI = (function (pub) {
 
     // communicate to the HelenaBaseUI what we've called the elements we're using for blockly stuff
     pub.setBlocklyDivIds("new_script_content", "toolbox", "blockly_area", "blockly_div");
+
+    var recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition || window.mozSpeechRecognition || window.msSpeechRecognition)();
+    recognition.lang = 'en-US';
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    function startRecognition(recognition){
+      if (pub.listen){
+        recognition.start();
+        console.log("Starting speech recognition"); 
+      }
+    }
+    startRecognition(recognition);
+
+    recognition.onresult = function(event) {
+      var likeliestText = event.results[0][0].transcript;
+      pub.hear(likeliestText);
+      //console.log('You said: ', event.results[0][0].transcript);
+      //console.log(event.results);
+    };
+    recognition.onend = function(event) {
+        startRecognition(recognition);
+    };
   }
 
   $(setUp);
@@ -43,6 +70,9 @@ var RecorderUI = (function (pub) {
    **********************************************************************/
 
   pub.setUpRecordingUI = function _setUpRecordingUI(){
+    // right off the bat, we should figure out what the user might say to trigger actions
+    pub.updatePromptsList();
+
     // we'll start on the first tab, our default, which gives user change to start a new recording
     var tabsDivs = $("#tabs");
     pub.tabs = tabsDivs.tabs();
@@ -56,6 +86,104 @@ var RecorderUI = (function (pub) {
       }
     });
   };
+
+  /**********************************************************************
+   * The prompt processing code for figuring out if we're triggering an action
+   **********************************************************************/
+
+  var promptsList = [];
+  function clean(word){
+    var newStr = String(word).replace(/^(\s|,|\.|'|")|(\s|,|\.|'|")+$/g, '');
+    return newStr.toLowerCase();
+  }
+  function makePromptStrings(plainAssociatedString){
+    if (!plainAssociatedString || plainAssociatedString === ""){
+      return [];
+    }
+    var singleWordList = plainAssociatedString.split(" ");
+    for (var i = 0; i < singleWordList.length; i++){
+      singleWordList[i] = clean(singleWordList[i]);
+    }
+    return[singleWordList];
+  }
+  pub.updatePromptsList = function _updatePromptsList(){
+    var handler = function(response){
+      promptsList = [];
+      _.each(response, 
+        function(prog){
+          var promptStrings = makePromptStrings(prog.associated_string);
+          for (var i = 0; i < promptStrings.length; i++){
+            promptsList.push({prompt: promptStrings[i], progId: prog.id});
+          }
+        });
+      console.log("promptsList", promptsList);
+    };
+    HelenaServerInteractions.loadSavedPrograms(handler);
+  };
+  function wordLikeHelper(targetWord,candidateWord){
+    return targetWord === candidateWord;
+  }
+  function wordLike(targetWord, candidateWord){
+    var guess = wordLikeHelper(targetWord, candidateWord);
+    if (guess){return true;}
+    if (targetWord.match(/^[0-9]+$/)){
+      // hm, looks like it might be a number
+      var alphaTargetWord = NumberToWords.toWords(targetWord);
+      guess = wordLikeHelper(alphaTargetWord, candidateWord);
+      if (guess){return true;}
+    }
+    if (candidateWord.match(/^[0-9]+$/)){
+      // hm, looks like it might be a number
+      var alphaCandidateWord = NumberToWords.toWords(candidateWord);
+      guess = wordLikeHelper(targetWord, alphaCandidateWord);
+      if (guess){return true;}
+    }
+  }
+  pub.hear = function _hear(str){
+    var words = str.split(" ");
+    if (wordLike("helena", clean(words[0]))){
+      console.log("New command:", words);
+      pub.processCommand(words);
+    }
+    else{
+      console.log("New text, but not a new command", words);
+    }
+  }
+  pub.processCommand = function _processCommand(wordsArray){
+    for (var i = 0; i < wordsArray.length; i++){
+      wordsArray[i] = clean(wordsArray[i]);
+    }
+    // remember, word 0 is "Helena" or we wouldn't have ended up here.
+    for (var j = 0; j < promptsList.length; j++){ // todo: ultimately these should be ordered in a smart way
+      var pl = promptsList[j]
+      var words = promptsList[j].prompt;
+      var correctCommand = true;
+      for (var k = 0; k < words.length; k++){
+        var promptWord = words[k];
+        if (wordsArray.length < k + 2){
+          correctCommand = false;
+          break; // wrong command
+        }
+        var spokenWord = wordsArray[k + 1]; // k + 1 because Helena should be first word
+        if (!wordLike(promptWord, spokenWord)){
+          correctCommand = false;
+          break; // wrong command
+        }
+      }
+      if (correctCommand){
+        // we found the right command!
+        var progId = promptsList[j].progId;
+        console.log(progId, promptsList[j]);
+        pub.runProgramById(progId);
+        return;
+      }
+    }
+  }
+
+
+  /**********************************************************************
+   * Back to real UI stuff
+   **********************************************************************/
 
   var currentRecordingWindow = null;
 
@@ -177,12 +305,8 @@ var RecorderUI = (function (pub) {
     div.find("#cancelRun").button("option", "disabled", false); // shouldn't be able to do these before we even run
 
     // trying something new.  have running just always save the thing.  otherwise, it's so unpredictable
-    pub.save(function(progId){
-      // ok good, now we have a program id (already set in pub.currentHelenaProgram.id)
-      ringerUseXpathFastMode = fastMode;
-      // run whichever program is currently being displayed (so pub.currentHelenaProgram)
-      pub.currentHelenaProgram.run({});
-    });
+    // we're not really doing output stuff, so is it ok to run without saving/getting a prog id?  todo: check
+    pub.currentHelenaProgram.run({}, function(){}, false);
   };
 
   var scriptRunCounter = 0;
@@ -209,6 +333,7 @@ var RecorderUI = (function (pub) {
       return
     }
     prog.setAssociatedString(triggerPhraseInputNode.value);
+    console.log("Current trigger phrase", triggerPhraseInputNode.value);
 
     // ok, time to call the func that actually interacts with the server
     // saveToServer(progName, postIdRetrievalContinuation, saveStartedHandler, saveCompletedHandler)
@@ -222,6 +347,8 @@ var RecorderUI = (function (pub) {
       // we've finished the save thing, so tell the user
       var status = div.find("#program_save_status");
       status.html("Saved");
+      // also update what we listen for...
+      pub.updatePromptsList();
     };
 
     prog.saveToServer(postIdRetrievalContinuation, saveStartedHandler, saveCompletedHandler);
@@ -553,6 +680,9 @@ var RecorderUI = (function (pub) {
     if (program && program.name){
       $("#new_script_content").find("#program_name").get(0).value = program.name;
     }
+    if (program && program.associatedString){
+      $("#new_script_content").find("#trigger_phrase").get(0).value = program.associatedString;
+    }
   };
 
   pub.updateDuplicateDetection = function _updateDuplicateDetection(){
@@ -839,7 +969,8 @@ var RecorderUI = (function (pub) {
       WALconsole.log("received program: ", response);
       var revivedProgram = ServerTranslationUtilities.unJSONifyProgram(response.program.serialized_program);
       revivedProgram.id = response.program.id; // if id was only assigned when it was saved, serialized_prog might not have that info yet
-      revivedProgram.name = response.program.name;
+      revivedProgram.setName(response.program.name);
+      revivedProgram.setAssociatedString(response.program.associated_string);
       setCurrentProgram(revivedProgram, null);
       $("#tabs").tabs("option", "active", 0); // make that first tab (the program running tab) active again
       pub.showProgramPreview(false); // false because we're not currently processing the program (as in, finding relations, something like that)
@@ -848,6 +979,12 @@ var RecorderUI = (function (pub) {
       }
     }
     HelenaServerInteractions.loadSavedProgram(progId, handler);
+  };
+
+  pub.runProgramById = function _runProgramById(progId){
+    pub.loadSavedProgram(progId, function(){
+      pub.run();
+    })
   };
 
   pub.updateRowsSoFar = function _updateRowsSoFar(runTabId, num){
