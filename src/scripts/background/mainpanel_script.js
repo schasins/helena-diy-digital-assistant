@@ -47,7 +47,6 @@ var RecorderUI = (function (pub) {
     function startRecognition(recognition){
       if (pub.listen){
         recognition.start();
-        console.log("Starting speech recognition"); 
       }
     }
     startRecognition(recognition);
@@ -142,11 +141,13 @@ var RecorderUI = (function (pub) {
   pub.hear = function _hear(str){
     var words = str.split(" ");
     if (wordLike("helena", clean(words[0]))){
+      console.log("________________")
+      console.log("New command:", str);
       console.log("New command:", words);
       pub.processCommand(words);
     }
     else{
-      console.log("New text, but not a new command", words);
+      console.log("New text, but not a new command", str);
     }
   }
   pub.processCommand = function _processCommand(wordsArray){
@@ -990,6 +991,13 @@ var RecorderUI = (function (pub) {
   pub.updateRowsSoFar = function _updateRowsSoFar(runTabId, num){
     var div = $("#" + runTabId).find("#running_script_content");
     div.find("#rows_so_far").html(num);
+  };
+
+  pub.newBlocklyBlockDraggedIn = function _newBlocklyBlockDraggedIn(blocklyBlock){
+    // if we don't even have a helena program right now, go ahead and just make a new one
+    if (!pub.currentHelenaProgram && blocklyBlock.WALStatement){
+      pub.currentHelenaProgram = new WebAutomationLanguage.Program([blocklyBlock.WALStatement], false);
+    }
   };
 
   return pub;
