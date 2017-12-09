@@ -43,7 +43,7 @@ var RecorderUI = (function (pub) {
     var recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition || window.mozSpeechRecognition || window.msSpeechRecognition)();
     recognition.lang = 'en-US';
     recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
+    recognition.maxAlternatives = 2;
     function startRecognition(recognition){
       if (pub.listen){
         recognition.start();
@@ -52,8 +52,13 @@ var RecorderUI = (function (pub) {
     startRecognition(recognition);
 
     recognition.onresult = function(event) {
+      console.log("speech event", event);
       var likeliestText = event.results[0][0].transcript;
-      pub.hear(likeliestText);
+      var worked = pub.hear(likeliestText);
+      console.log("worked?", worked);
+      if (!worked){
+        pub.hear(event.results[0][1].transcript);
+      }
       //console.log('You said: ', event.results[0][0].transcript);
       //console.log(event.results);
     };
@@ -120,7 +125,9 @@ var RecorderUI = (function (pub) {
     HelenaServerInteractions.loadSavedPrograms(handler);
   };
   function wordLikeHelper(targetWord,candidateWord){
-    return targetWord === candidateWord;
+    var guess = targetWord === candidateWord;
+    if (guess){return true;}
+    // var distance = MiscUtilities.levenshteinDistance(targetWord, candidateWord);
   }
   function wordLike(targetWord, candidateWord){
     var guess = wordLikeHelper(targetWord, candidateWord);
@@ -144,11 +151,12 @@ var RecorderUI = (function (pub) {
       console.log("________________")
       console.log("New command:", str);
       console.log("New command:", words);
-      pub.processCommand(words);
+      return pub.processCommand(words);
     }
     else{
       console.log("New text, but not a new command", str);
     }
+    return false;
   }
   pub.processCommand = function _processCommand(wordsArray){
     for (var i = 0; i < wordsArray.length; i++){
@@ -176,9 +184,11 @@ var RecorderUI = (function (pub) {
         var progId = promptsList[j].progId;
         console.log(progId, promptsList[j]);
         pub.runProgramById(progId);
-        return;
+        return true;
       }
     }
+    // never managed to find a matching command.  return false
+    return false;
   }
 
 
