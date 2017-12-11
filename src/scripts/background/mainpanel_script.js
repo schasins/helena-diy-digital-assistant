@@ -5,7 +5,8 @@
  **********************************************************************/
 
  function pretendToHear(str){
-   RecorderUI.hear(str);
+  var command = RecorderUI.extractHelenaCommand(str)
+  RecorderUI.hear(command);
  }
 
 // this inherits from HelenaUIBase
@@ -172,7 +173,7 @@ var RecorderUI = (function (pub) {
     // never managed to find a matching command.  return false
     return false;
   }
-  function extractHelenaCommand(str){
+  pub.extractHelenaCommand = function(str){
     var words = str.split(" ");
     for (var i = 0; i < words.length; i++){
       var cleanWord = clean(words[i]);
