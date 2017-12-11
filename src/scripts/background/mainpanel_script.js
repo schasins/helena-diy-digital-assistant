@@ -43,7 +43,7 @@ var RecorderUI = (function (pub) {
     var recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition || window.mozSpeechRecognition || window.msSpeechRecognition)();
     recognition.lang = 'en-US';
     recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
+    recognition.maxAlternatives = 3;
     function startRecognition(recognition){
       if (pub.listen){
         recognition.start();
@@ -52,11 +52,8 @@ var RecorderUI = (function (pub) {
     startRecognition(recognition);
 
     recognition.onresult = function(event) {
-      var likeliestText = event.results[0][0].transcript;
-      pub.hear(likeliestText);
-      //console.log('You said: ', event.results[0][0].transcript);
-      //console.log(event.results);
-    };
+      pub.processRecognitionResult(event);
+    }
     recognition.onend = function(event) {
         startRecognition(recognition);
     };
@@ -120,7 +117,9 @@ var RecorderUI = (function (pub) {
     HelenaServerInteractions.loadSavedPrograms(handler);
   };
   function wordLikeHelper(targetWord,candidateWord){
-    return targetWord === candidateWord;
+    var guess = targetWord === candidateWord;
+    if (guess){return true;}
+    // var distance = MiscUtilities.levenshteinDistance(targetWord, candidateWord);
   }
   function wordLike(targetWord, candidateWord){
     var guess = wordLikeHelper(targetWord, candidateWord);
@@ -138,17 +137,8 @@ var RecorderUI = (function (pub) {
       if (guess){return true;}
     }
   }
-  pub.hear = function _hear(str){
-    var words = str.split(" ");
-    if (wordLike("helena", clean(words[0]))){
-      console.log("________________")
-      console.log("New command:", str);
-      console.log("New command:", words);
-      pub.processCommand(words);
-    }
-    else{
-      console.log("New text, but not a new command", str);
-    }
+  pub.hear = function _hear(words){
+    return pub.processCommand(words);
   }
   pub.processCommand = function _processCommand(wordsArray){
     for (var i = 0; i < wordsArray.length; i++){
@@ -176,11 +166,46 @@ var RecorderUI = (function (pub) {
         var progId = promptsList[j].progId;
         console.log(progId, promptsList[j]);
         pub.runProgramById(progId);
-        return;
+        return true;
       }
     }
+    // never managed to find a matching command.  return false
+    return false;
   }
-
+  function extractHelenaCommand(str){
+    var words = str.split(" ");
+    for (var i = 0; i < words.length; i++){
+      var cleanWord = clean(words[i]);
+      if (wordLike("helena", cleanWord)){
+        return words.slice(i);
+      }
+    }
+    // made it through all the words, and none of them was 'helena'
+    return false;
+  }
+  pub.processRecognitionResult = function(event){
+    console.log("speech event", event);
+    var firstHelenaCommand = null;
+    for (var i = 0; i < event.results[0].length; i++){
+      var text = event.results[0][i].transcript;
+      var potentialHelenaCommand = extractHelenaCommand(text);
+      if (potentialHelenaCommand){
+        if (firstHelenaCommand === null){
+          firstHelenaCommand = potentialHelenaCommand;
+        }
+        var matchedWithHelenaCommand = pub.hear(potentialHelenaCommand);
+        if (matchedWithHelenaCommand){
+          return;
+        }
+      }
+    }
+    // made it through all of them, and no successful helena run (since we didn't return).
+    // did text mention helena?  if yes, should tell the user we're confused
+    // if not it's just randos talking, should ignore it
+    if (firstHelenaCommand){
+      WebAutomationLanguage.say("Sorry, I didn't understand your question: " + (firstHelenaCommand.slice(1).join(" ")));
+    }
+  };
 
   /**********************************************************************
    * Back to real UI stuff
