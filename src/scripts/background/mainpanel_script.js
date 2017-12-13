@@ -5,8 +5,10 @@
  **********************************************************************/
 
  function pretendToHear(str){
-  var command = RecorderUI.extractHelenaCommand(str)
-  RecorderUI.hear(command);
+  var command = RecorderUI.extractHelenaCommand(str);
+  if (command){
+    RecorderUI.hear(command);
+  }
  }
 
 // this inherits from HelenaUIBase
@@ -88,29 +90,91 @@ var RecorderUI = (function (pub) {
    * The prompt processing code for figuring out if we're triggering an action
    **********************************************************************/
 
+  function ConcreteWords(words){
+    this.words = words;
+    this.getWords = function(){
+      return this.words;
+    };
+  }
+  function Options(setOfConcreteWordLists){
+    this.setOfConcreteWordLists = setOfConcreteWordLists;
+    this.getSetOfConcreteWordLists = function(){
+      return this.setOfConcreteWordLists;
+    };
+  }
+  function Variable(name){
+    this.name = name;
+    this.name = function(){
+      return this.name;
+    };
+  }
+
   var promptsList = [];
   function clean(word){
     var newStr = String(word).replace(/^(\s|,|\.|'|")|(\s|,|\.|'|")+$/g, '');
     return newStr.toLowerCase();
   }
-  function makePromptStrings(plainAssociatedString){
-    if (!plainAssociatedString || plainAssociatedString === ""){
-      return [];
-    }
-    var singleWordList = plainAssociatedString.split(" ");
+  function stringToConcreteWords(str){
+    str = str.replace(/^(\s|,|\.|'|")|(\s|,|\.|'|")+$/g, '');
+    var singleWordList = str.split(" ");
     for (var i = 0; i < singleWordList.length; i++){
       singleWordList[i] = clean(singleWordList[i]);
     }
-    return[singleWordList];
+    return new ConcreteWords(singleWordList);
+  }
+  function makePromptObject(plainAssociatedString){
+    if (!plainAssociatedString || plainAssociatedString === ""){
+      return [];
+    }
+
+    // first let's try adding options
+    var segments = [];
+    var currentStringToProcess = plainAssociatedString;
+    while(true){
+      // should we introduce any options based on finding the [...] notation?
+      var match = currentStringToProcess.match(/\[(.+?)\]/)
+      if (!match){
+        // no more matches.  just push the current string as the final segment
+        segments.push(currentStringToProcess);
+        break;
+      }
+      // ok, found a match
+      var outerText = match[0];
+      var splitText = currentStringToProcess.split(outerText);
+      // the text before the match is just plain, so put that in
+      segments.push(splitText[0]);
+      // now let's make the next segment, which is the Options object
+      var optionTexts = match[1].split("/");
+      var optionObjs = [];
+      for (var i = 0; i < optionTexts.length; i++){
+        var optionObj = stringToConcreteWords(optionTexts[i]); // no recursion!  all options must be plain strings.  todo: is this ok?
+        optionObjs.push(optionObj);
+      }
+      var optionsSegment = new Options(optionObjs);
+      segments.push(optionsSegment);
+
+      // ok, and now the new string to process is the rest of the string after the match
+      currentStringToProcess = splitText[1];
+    }
+
+    // and now let's make some ConcreteWords objects
+    for (var i = 0; i < segments.length; i++){
+      // ok, at this point, anything that remains a string should be turned into concrete words
+      if (typeof segments[i] === "string"){
+        segments[i] = stringToConcreteWords(segments[i]);
+      }
+    }
+    return segments;
   }
   pub.updatePromptsList = function _updatePromptsList(){
     var handler = function(response){
       promptsList = [];
       _.each(response, 
         function(prog){
-          var promptStrings = makePromptStrings(prog.associated_string);
-          for (var i = 0; i < promptStrings.length; i++){
-            promptsList.push({prompt: promptStrings[i], progId: prog.id});
+          var promptObject = makePromptObject(prog.associated_string);
+          if (promptObject.length > 0){
+            // things with zero segments will just match everything, which we never want -- don't want to just always run one command...
+            promptsList.push({prompt: promptObject, progId: prog.id});
           }
         });
       console.log("promptsList", promptsList);
@@ -146,22 +210,50 @@ var RecorderUI = (function (pub) {
       wordsArray[i] = clean(wordsArray[i]);
     }
     // remember, word 0 is "Helena" or we wouldn't have ended up here.
+    var currentWords = wordsArray.slice(1, wordsArray.length);
+
     for (var j = 0; j < promptsList.length; j++){ // todo: ultimately these should be ordered in a smart way
       var pl = promptsList[j]
-      var words = promptsList[j].prompt;
+      var targetPromptObjectSegments = promptsList[j].prompt;
       var correctCommand = true;
-      for (var k = 0; k < words.length; k++){
-        var promptWord = words[k];
-        if (wordsArray.length < k + 2){
-          correctCommand = false;
-          break; // wrong command
+      for (var k = 0; k < targetPromptObjectSegments.length; k++){
+        var skipForwardXWords = null;
+        if (targetPromptObjectSegments[k] instanceof ConcreteWords){
+          var targetWords = targetPromptObjectSegments[k].getWords();
+          var matchSoFar = findPhraseAtStart(targetWords, currentWords);
+          if (!matchSoFar){
+            // ok, couldn't match this segment of the current command.  break out of the segments loop and try the next command
+            correctCommand = false;
+            break;
+          }
+          else{
+            skipForwardXWords = targetWords.length;
+          }
         }
-        var spokenWord = wordsArray[k + 1]; // k + 1 because Helena should be first word
-        if (!wordLike(promptWord, spokenWord)){
-          correctCommand = false;
-          break; // wrong command
+        else if (targetPromptObjectSegments[k] instanceof Options){
+          var targetWordOptions = targetPromptObjectSegments[k].getSetOfConcreteWordLists();
+          var foundAMatch = false;
+          for (var l = 0; l < targetWordOptions.length; l++){
+            // ok, each targetWordOption is an instance of ConcreteWords
+            var targetWords = targetWordOptions[l].getWords();
+            var matchSoFar = findPhraseAtStart(targetWords, currentWords);
+            if (matchSoFar){
+              // awesome, one of the options matched.  we're good on this segment
+              foundAMatch = true;
+              skipForwardXWords = targetWords.length;
+              break;
+            }
+          }
+          if (!foundAMatch){
+            correctCommand = false;
+            break;
+          }
         }
+
+        // ok, we processed this segment, which means we consumed some words.  let's go ahead and skip forward to after those
+        currentWords = currentWords.slice(skipForwardXWords, currentWords.length);
       }
+      // cool, we made it all the way through all the segments and managed to match them all!
       if (correctCommand){
         // we found the right command!
         var progId = promptsList[j].progId;
@@ -171,6 +263,55 @@ var RecorderUI = (function (pub) {
       }
     }
     // never managed to find a matching command.  return false
+    return false;
+  }
+  function findPhraseAtStart(cleanTargetWords, cleanWords){
+    if (cleanWords.length < cleanTargetWords.length){
+      return false;
+    }
+    for (var i = 0; i < cleanTargetWords.length; i++){
+      var cleanWord = cleanWords[i];
+      var cleanTargetWord = cleanTargetWords[i];
+      if (!wordLike(cleanWord, cleanTargetWord)){
+        return false;
+      }
+    }
+    return true;
+  }
+  function findInstanceOfPhrase(cleanTargetWords, cleanWords){
+    for (var i = 0; i < cleanWords.length; i++){
+      var cleanWord = cleanWords[i];
+      if (wordLike(cleanTargetWords[0], cleanWord)){
+        // ok, we've matched the first word, but need to match all the following to conclude we've found the target words
+        var foundPhrase = true;
+        for (var j = 1; j < cleanTargetWords.length; j++){
+          var cleanTargetWord = cleanTargetWords[j];
+          if ((i + j) > (cleanWords.length - 1)){
+            // we've hit the end of the candidate words without ever finding the complete target phrase.  time to fail
+            return false;
+          }
+          // we now know it's ok to index into i + j
+          var cleanWord = cleanWords[i + j];
+          if (!wordLike(cleanTargetWord, cleanWord)){
+            // no good.  we've broken the pattern, haven't found the match
+            foundPhrase = false;
+            break;
+          }
+          // so far so good.  keep going with the next iteration of the cleanTargetWords loop
+        }
+        // ok, we made it through the cleanTargetWords.  did we actually find the whole phrase?
+        if (foundPhrase){
+          // yay!  we found it!  ok, let's split the words into the pieces before, in, and after the target phrase
+          var before = cleanWords.slice(0,i);
+          var within = cleanWords.slice(i, i + cleanTargetWords.length);
+          var after = cleanWords.slice(i + cleanTargetWords.length, cleanWords.length);
+          console.log("before, within, after", before, within, after);
+          return [before, within, after];
+        }
+        // drat, didn't find the phrase.  try the next iteration of the cleanWords loop, see if the target phrase starts at the next index
+      }
+    }
+    // well drat.  we made it to the end of this loop and never found the phrase
     return false;
   }
   pub.extractHelenaCommand = function(str){
@@ -189,7 +330,7 @@ var RecorderUI = (function (pub) {
     var firstHelenaCommand = null;
     for (var i = 0; i < event.results[0].length; i++){
       var text = event.results[0][i].transcript;
-      var potentialHelenaCommand = extractHelenaCommand(text);
+      var potentialHelenaCommand = pub.extractHelenaCommand(text);
       if (potentialHelenaCommand){
         if (firstHelenaCommand === null){
           firstHelenaCommand = potentialHelenaCommand;
