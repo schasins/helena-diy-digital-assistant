@@ -104,7 +104,7 @@ var RecorderUI = (function (pub) {
   }
   function Variable(name){
     this.name = name;
-    this.name = function(){
+    this.getName = function(){
       return this.name;
     };
   }
@@ -116,6 +116,9 @@ var RecorderUI = (function (pub) {
   }
   function stringToConcreteWords(str){
     str = str.replace(/^(\s|,|\.|'|")|(\s|,|\.|'|")+$/g, '');
+    if (str.length < 1){
+      return null;
+    }
     var singleWordList = str.split(" ");
     for (var i = 0; i < singleWordList.length; i++){
       singleWordList[i] = clean(singleWordList[i]);
@@ -132,38 +135,63 @@ var RecorderUI = (function (pub) {
     var currentStringToProcess = plainAssociatedString;
     while(true){
       // should we introduce any options based on finding the [...] notation?
-      var match = currentStringToProcess.match(/\[(.+?)\]/)
-      if (!match){
+      var optionMatch = currentStringToProcess.match(/\[(.+?)\]/);
+      // should we introduce any variables based on finding the {...} notation?
+      var variableMatch = currentStringToProcess.match(/\{(.+?)\}/);
+      if (!optionMatch && !variableMatch){
         // no more matches.  just push the current string as the final segment
-        segments.push(currentStringToProcess);
+        var concreteWordsObj = stringToConcreteWords(currentStringToProcess);
+        if (concreteWordsObj){
+          segments.push(concreteWordsObj);
+        }
         break;
       }
-      // ok, found a match
+      // ok, found a match.  let's process whichever came first
+      var match = null;
+      if (optionMatch && variableMatch){
+        if (currentStringToProcess.indexOf(optionMatch) < currentStringToProcess.indexOf(variableMatch)){
+          match = optionMatch;
+        }
+        else{
+          match = variableMatch;
+        }
+      }
+      else if (optionMatch){
+        match = optionMatch;
+      }
+      else if (variableMatch){
+        match = variableMatch;
+      }
+
       var outerText = match[0];
       var splitText = currentStringToProcess.split(outerText);
       // the text before the match is just plain, so put that in
-      segments.push(splitText[0]);
-      // now let's make the next segment, which is the Options object
-      var optionTexts = match[1].split("/");
-      var optionObjs = [];
-      for (var i = 0; i < optionTexts.length; i++){
-        var optionObj = stringToConcreteWords(optionTexts[i]); // no recursion!  all options must be plain strings.  todo: is this ok?
-        optionObjs.push(optionObj);
+      var concreteWordsObj = stringToConcreteWords(splitText[0]);
+      if (concreteWordsObj){
+        segments.push(concreteWordsObj);
       }
-      var optionsSegment = new Options(optionObjs);
-      segments.push(optionsSegment);
+
+      // now let's make the next segment, which is the Options or Variable object
+      if (match === optionMatch){
+        var optionTexts = match[1].split("/");
+        var optionObjs = [];
+        for (var i = 0; i < optionTexts.length; i++){
+          var optionObj = stringToConcreteWords(optionTexts[i]); // no recursion!  all options must be plain strings.  todo: is this ok?
+          optionObjs.push(optionObj);
+        }
+        var optionsSegment = new Options(optionObjs);
+        segments.push(optionsSegment);
+      }
+      else{
+        // ok, it's the variable version, so it's pretty simple
+        var variableSegment = new Variable(match[1]);
+        segments.push(variableSegment);
+      }
 
       // ok, and now the new string to process is the rest of the string after the match
       currentStringToProcess = splitText[1];
     }
 
-    // and now let's make some ConcreteWords objects
-    for (var i = 0; i < segments.length; i++){
-      // ok, at this point, anything that remains a string should be turned into concrete words
-      if (typeof segments[i] === "string"){
-        segments[i] = stringToConcreteWords(segments[i]);
-      }
-    }
     return segments;
   }
   pub.updatePromptsList = function _updatePromptsList(){
@@ -205,57 +233,99 @@ var RecorderUI = (function (pub) {
   pub.hear = function _hear(words){
     return pub.processCommand(words);
   }
+
+  function processCommandSingleCandidatePrompt(wordsArray, targetPromptObjectSegments, topLevel){
+    if (topLevel === undefined){ topLevel = true; }
+    if (targetPromptObjectSegments.length === 0){
+      // saying it's a match for empty segments is only ok if we've gotten here from recursion
+      // and if there aren't any more words to eat
+      return topLevel === false && wordsArray.length === 0; 
+    }
+    var currentWords = wordsArray;
+    var correctCommand = true;
+    for (var k = 0; k < targetPromptObjectSegments.length; k++){
+      var skipForwardXWords = null;
+      if (targetPromptObjectSegments[k] instanceof ConcreteWords){
+        var targetWords = targetPromptObjectSegments[k].getWords();
+        var matchSoFar = findPhraseAtStart(targetWords, currentWords);
+        if (!matchSoFar){
+          // ok, couldn't match this segment of the current command.  break out of the segments loop and try the next command
+          correctCommand = false;
+          break;
+        }
+        else{
+          skipForwardXWords = targetWords.length;
+        }
+      }
+      else if (targetPromptObjectSegments[k] instanceof Options){
+        var targetWordOptions = targetPromptObjectSegments[k].getSetOfConcreteWordLists();
+        var foundAMatch = false;
+        for (var l = 0; l < targetWordOptions.length; l++){
+          // ok, each targetWordOption is an instance of ConcreteWords
+          var targetWords = targetWordOptions[l].getWords();
+          var matchSoFar = findPhraseAtStart(targetWords, currentWords);
+          if (matchSoFar){
+            // awesome, one of the options matched.  we're good on this segment
+            foundAMatch = true;
+            skipForwardXWords = targetWords.length;
+            break;
+          }
+        }
+        if (!foundAMatch){
+          correctCommand = false;
+          break;
+        }
+      }
+      else if (targetPromptObjectSegments[k] instanceof Variable){
+        /* ok.  this one is going to involve some ugly backtracking.  what we're going to do is
+        figure the variable better have at least one word, so we'll start by guessing it's just that one word
+        and we'll recurse and see if the remaining segments can match the rest of the text;
+        if not we'll try with 2 words, and so on, until we either find a match or reach the end
+        */
+        // todo: is it a problem that we'll have cleaned the text we'll use as the variable?  should we have kept it unclean?
+        for (var l = 1; l <= currentWords.length; l++){
+          var currentVariableWordsGuess = currentWords.slice(0,l);
+          var currentRestOfTheWordsGuess = currentWords.slice(l, currentWords.length);
+          var restOfTheSegments = targetPromptObjectSegments.slice(k + 1, targetPromptObjectSegments.length);
+          var match = processCommandSingleCandidatePrompt(currentRestOfTheWordsGuess, restOfTheSegments, false);
+          if (match){
+            // cool!  we found a match!  and because the recursion runs the rest of the segments in the loop
+            // we don't need to do it in this loop.  can just return the match
+            console.log("variable", targetPromptObjectSegments[k].getName(), currentVariableWordsGuess);
+            return match;
+          }
+        }
+        // well drat.  we tried every combination without finding a match and returning.  so...no way to satisfy this command
+        return false;
+      }
+      else{
+        WALconsole.warn("Ended up with a prompt segment that we don't recognize!", targetPromptObjectSegments[k], promptsList[j]);
+      }
+
+      // ok, we processed this segment, which means we consumed some words.  let's go ahead and skip forward to after those
+      currentWords = currentWords.slice(skipForwardXWords, currentWords.length);
+    }
+    // cool, we made it all the way through all the segments and managed to match them all!
+    if (correctCommand){
+      // this was the right command!
+      return true;
+    }
+  }
+
   pub.processCommand = function _processCommand(wordsArray){
+
+    var currentWords = wordsArray;
     for (var i = 0; i < wordsArray.length; i++){
       wordsArray[i] = clean(wordsArray[i]);
     }
     // remember, word 0 is "Helena" or we wouldn't have ended up here.
-    var currentWords = wordsArray.slice(1, wordsArray.length);
+    currentWords = wordsArray.slice(1, wordsArray.length);      
 
-    for (var j = 0; j < promptsList.length; j++){ // todo: ultimately these should be ordered in a smart way
-      var pl = promptsList[j]
+    for (var j = 0; j < promptsList.length; j++){ // todo: ultimately these should be ordered in a smart way    
+      var pl = promptsList[j];
       var targetPromptObjectSegments = promptsList[j].prompt;
-      var correctCommand = true;
-      for (var k = 0; k < targetPromptObjectSegments.length; k++){
-        var skipForwardXWords = null;
-        if (targetPromptObjectSegments[k] instanceof ConcreteWords){
-          var targetWords = targetPromptObjectSegments[k].getWords();
-          var matchSoFar = findPhraseAtStart(targetWords, currentWords);
-          if (!matchSoFar){
-            // ok, couldn't match this segment of the current command.  break out of the segments loop and try the next command
-            correctCommand = false;
-            break;
-          }
-          else{
-            skipForwardXWords = targetWords.length;
-          }
-        }
-        else if (targetPromptObjectSegments[k] instanceof Options){
-          var targetWordOptions = targetPromptObjectSegments[k].getSetOfConcreteWordLists();
-          var foundAMatch = false;
-          for (var l = 0; l < targetWordOptions.length; l++){
-            // ok, each targetWordOption is an instance of ConcreteWords
-            var targetWords = targetWordOptions[l].getWords();
-            var matchSoFar = findPhraseAtStart(targetWords, currentWords);
-            if (matchSoFar){
-              // awesome, one of the options matched.  we're good on this segment
-              foundAMatch = true;
-              skipForwardXWords = targetWords.length;
-              break;
-            }
-          }
-          if (!foundAMatch){
-            correctCommand = false;
-            break;
-          }
-        }
-
-        // ok, we processed this segment, which means we consumed some words.  let's go ahead and skip forward to after those
-        currentWords = currentWords.slice(skipForwardXWords, currentWords.length);
-      }
-      // cool, we made it all the way through all the segments and managed to match them all!
-      if (correctCommand){
-        // we found the right command!
+      var thisIsTheOne = processCommandSingleCandidatePrompt(currentWords, targetPromptObjectSegments);
+      if (thisIsTheOne){
         var progId = promptsList[j].progId;
         console.log(progId, promptsList[j]);
         pub.runProgramById(progId);
