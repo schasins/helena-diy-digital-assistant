@@ -60,6 +60,8 @@ var RecorderUI = (function (pub) {
     recognition.onend = function(event) {
         startRecognition(recognition);
     };
+
+    setCurrentProgram(new WebAutomationLanguage.Program([], false), []);
   }
 
   $(setUp);
@@ -84,6 +86,7 @@ var RecorderUI = (function (pub) {
         pub.loadSavedScripts();
       }
     });
+
   };
 
   /**********************************************************************
@@ -243,6 +246,7 @@ var RecorderUI = (function (pub) {
     }
     var currentWords = wordsArray;
     var correctCommand = true;
+    var variablesMapping = {};
     for (var k = 0; k < targetPromptObjectSegments.length; k++){
       var skipForwardXWords = null;
       if (targetPromptObjectSegments[k] instanceof ConcreteWords){
@@ -292,7 +296,11 @@ var RecorderUI = (function (pub) {
             // cool!  we found a match!  and because the recursion runs the rest of the segments in the loop
             // we don't need to do it in this loop.  can just return the match
             console.log("variable", targetPromptObjectSegments[k].getName(), currentVariableWordsGuess);
-            return match;
+            variablesMapping[targetPromptObjectSegments[k].getName()] = currentVariableWordsGuess;
+            for (var key in match){
+              variablesMapping[key] = match[key];
+            }
+            return variablesMapping;
           }
         }
         // well drat.  we tried every combination without finding a match and returning.  so...no way to satisfy this command
@@ -308,7 +316,7 @@ var RecorderUI = (function (pub) {
     // cool, we made it all the way through all the segments and managed to match them all!
     if (correctCommand){
       // this was the right command!
-      return true;
+      return variablesMapping;
     }
   }
 
@@ -324,11 +332,13 @@ var RecorderUI = (function (pub) {
     for (var j = 0; j < promptsList.length; j++){ // todo: ultimately these should be ordered in a smart way    
       var pl = promptsList[j];
       var targetPromptObjectSegments = promptsList[j].prompt;
-      var thisIsTheOne = processCommandSingleCandidatePrompt(currentWords, targetPromptObjectSegments);
-      if (thisIsTheOne){
+      // call below returns false if the command doesn't match, a dict of parameters if it does match
+      var paramDictionary = processCommandSingleCandidatePrompt(currentWords, targetPromptObjectSegments);
+      if (paramDictionary){
+        // awesome!  we found the 
         var progId = promptsList[j].progId;
         console.log(progId, promptsList[j]);
-        pub.runProgramById(progId);
+        pub.runProgramById(progId, paramDictionary);
         return true;
       }
     }
@@ -523,16 +533,18 @@ var RecorderUI = (function (pub) {
     }
     */
 
+
+    // when the user udpates the trigger phrase, we'll need to do some special processing
+    div.find("#trigger_phrase").get(0).onchange = pub.processNewTriggerPhrase;
+
     HelenaUIBase.setUpBlocklyEditor();
 
     RecorderUI.updateDisplayedScript();
     RecorderUI.updateDisplayedRelations(inProgress);
   };
 
-  pub.run = function _run(fastMode){
-    if (fastMode === undefined){ fastMode = false;}
-    // first set the correct fast mode, which means setting it to false if we haven't gotten true passed in
-    // might still be on from last time
+  pub.run = function _run(paramDictionary){
+    if (paramDictionary === undefined){ paramDictionary = {}; }
 
     if (!pub.currentHelenaProgram){
       WALconsole.warn("Tried to run program before we have a program to run.");
@@ -544,7 +556,7 @@ var RecorderUI = (function (pub) {
 
     // trying something new.  have running just always save the thing.  otherwise, it's so unpredictable
     // we're not really doing output stuff, so is it ok to run without saving/getting a prog id?  todo: check
-    pub.currentHelenaProgram.run({}, function(){}, false);
+    pub.currentHelenaProgram.run({}, function(){}, paramDictionary, false);
   };
 
   var scriptRunCounter = 0;
@@ -555,13 +567,37 @@ var RecorderUI = (function (pub) {
     runObject = rObj;
   };
 
+  pub.processNewTriggerPhrase = function _processNewTriggerPhrase(){
+    var div = $("#new_script_content");
+    var prog = pub.currentHelenaProgram;
+
+    var triggerPhraseInputNode = div.find("#trigger_phrase").get(0);
+    var triggerPhraseString = triggerPhraseInputNode.value;
+    prog.setAssociatedString(triggerPhraseString);
+    console.log("Current trigger phrase", triggerPhraseString);
+    var re = /\{(.+?)\}/g;
+    var match = null;
+    var variableNames = [];
+    while (match = re.exec(triggerPhraseString)) {
+      console.log(match[1], match[2]);
+      variableNames.push(match[1]);
+    }
+    console.log("parameter names", variableNames);
+    var priorParameterNames = prog.getParameterNames();
+    if (!_.isEqual(priorParameterNames, variableNames)){
+      prog.setParameterNames(variableNames);
+      // now that we've set new variable names, the blockly blocks should be udpated to reflect that
+      pub.updateDisplayedScript();
+    }
+  }
+
   // for saving a program to the server
   pub.save = function _save(postIdRetrievalContinuation){
     var prog = pub.currentHelenaProgram;
     var div = $("#new_script_content");
     var name = div.find("#program_name").get(0).value;
     prog.setName(name);
-    var triggerPhraseInputNode = div.find("#trigger_phrase").get(0)
+    var triggerPhraseInputNode = div.find("#trigger_phrase").get(0);
     if (triggerPhraseInputNode.value === triggerPhraseInputNode.defaultValue){
       // it's all well and good to have the default program name, since that doesn't matter
       // but you really need to have a good trigger phrase
@@ -570,8 +606,6 @@ var RecorderUI = (function (pub) {
         {"OK":function(){}});
       return
     }
-    prog.setAssociatedString(triggerPhraseInputNode.value);
-    console.log("Current trigger phrase", triggerPhraseInputNode.value);
 
     // ok, time to call the func that actually interacts with the server
     // saveToServer(progName, postIdRetrievalContinuation, saveStartedHandler, saveCompletedHandler)
@@ -1219,9 +1253,10 @@ var RecorderUI = (function (pub) {
     HelenaServerInteractions.loadSavedProgram(progId, handler);
   };
 
-  pub.runProgramById = function _runProgramById(progId){
+  pub.runProgramById = function _runProgramById(progId, paramDictionary){
+    if (paramDictionary === undefined){ paramDictionary = {};}
     pub.loadSavedProgram(progId, function(){
-      pub.run();
+      pub.run(paramDictionary);
     })
   };
 
@@ -1232,8 +1267,16 @@ var RecorderUI = (function (pub) {
 
   pub.newBlocklyBlockDraggedIn = function _newBlocklyBlockDraggedIn(blocklyBlock){
     // if we don't even have a helena program right now, go ahead and just make a new one
-    if (!pub.currentHelenaProgram && blocklyBlock.WALStatement){
-      pub.currentHelenaProgram = new WebAutomationLanguage.Program([blocklyBlock.WALStatement], false);
+    if (pub.currentHelenaProgram.statements.length === 0 && blocklyBlock.WALStatement){
+      // going to make a new program based on this new statement just dragged in, since the prior prog was empty
+      // but remember we may already have set parameters and trigger phrase for the nonexistant one
+      var priorAssociatedString = pub.currentHelenaProgram.getAssociatedString();
+      var priorAssociatedVarNames = pub.currentHelenaProgram.getParameterNames();
+      // make a new program with the new statement
+      setCurrentProgram(new WebAutomationLanguage.Program([blocklyBlock.WALStatement], false), []);
+      // but use the same associated string we already established
+      pub.currentHelenaProgram.setAssociatedString(priorAssociatedString);
+      pub.currentHelenaProgram.setParameterNames(priorAssociatedVarNames);
     }
   };
 
