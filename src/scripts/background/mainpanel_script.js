@@ -118,7 +118,8 @@ var RecorderUI = (function (pub) {
     return newStr.toLowerCase();
   }
   function stringToConcreteWords(str){
-    str = str.replace(/^(\s|,|\.|'|")|(\s|,|\.|'|")+$/g, '');
+    str = str.replace(/[.,\/#!?$%\^&\*;:{}=\-_`~()]/g, ''); // first remove all punctuation
+    str = str.replace(/^(\s|,|\.|'|")|(\s|,|\.|'|")+$/g, ''); // now strip off space at the end or beginning
     if (str.length < 1){
       return null;
     }
