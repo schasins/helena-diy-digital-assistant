@@ -5,6 +5,9 @@
  **********************************************************************/
 
  function pretendToHear(str){
+  if (str.toLowerCase().indexOf("helena") < 0){
+    console.log("Remember to preface commands with 'Helena,'");
+  }
   var command = RecorderUI.extractHelenaCommand(str);
   if (command){
     RecorderUI.hear(command);
@@ -15,7 +18,7 @@
 var RecorderUI = (function (pub) {
   pub.tabs = null;
   var ringerUseXpathFastMode = false;
-  var demoMode = true;
+  var demoMode = false;
   var runObject = null;
   pub.listen = true;
 
@@ -703,28 +706,43 @@ var RecorderUI = (function (pub) {
   }
 
   pub.updateDisplayedRelations = function _updateDisplayedRelations(currentlyUpdating){
-    WALconsole.log("updateDisplayedRelation");
-    if (currentlyUpdating === undefined){ currentlyUpdating = false; }
-
     if (!pub.currentHelenaProgram){
       WALconsole.warn("Tried to call updateDisplayedRelations before setting pub.currentHelenaProgram.");
       return;
     }
+    WALconsole.log("updateDisplayedRelation");
+    if (currentlyUpdating === undefined){ currentlyUpdating = false; }
 
     var relationObjects = pub.currentHelenaProgram.relations;
     var $div = $("#new_script_content").find("#status_message");
     $div.html("");
+    var $overlay = $("#overlay");
+    var $overlaytext = $overlay.find("#overlay_text");
     if (currentlyUpdating){
-      $div.html("Looking at webpages to find relevant tables.  Give us a moment.<br><center><img src='../icons/ajax-loader.gif'></center>");
-      var giveUpButton = $("<button>Give up looking for relevant tables.</button>");
-      giveUpButton.button();
-      giveUpButton.click(function(){
-        pub.currentHelenaProgram.insertLoops(true); // if user thinks we won't have relations, go ahead and do prog processing (making loopyStatements) without them
-      });
-      $div.append(giveUpButton);
+      $overlaytext.html("<center><img src='../icons/ajax-loader.gif'><br>Looking at webpages to find relevant tables.  Give us a moment.<br></center>");
+      
+      if (!demoMode){
+        var giveUpButton = $("<button>Give up looking for relevant tables.</button>");
+        giveUpButton.button();
+        giveUpButton.click(function(){
+          pub.currentHelenaProgram.insertLoops(true); // if user thinks we won't have relations, go ahead and do prog processing (making loopyStatements) without them
+          // and let's prevent future guessed relations from messing us up
+          pub.currentHelenaProgram.forbidAutomaticLoopInsertion();
+        });
+        $overlaytext.append(giveUpButton);
+
+        var giveUpButton2 = $("<button>Give up ON THIS CURRENT PAGE (and continue to next page).</button>");
+        giveUpButton2.button();
+        giveUpButton2.click(function(){
+          currentSkipper(); // this gets updated by handleFunctionForSkippingToNextPageOfRelationFinding above
+        });
+        $overlaytext.append(giveUpButton2);
+      }
+
+      $overlay.css("display", "inline");
     }
     else{
-      $div.html("");
+      $overlay.css("display", "none");
     }
 
     $div = $("#new_script_content").find("#relations");
@@ -755,14 +773,9 @@ var RecorderUI = (function (pub) {
             var columnTitle = $("<input></input>");
             columnTitle.val(columns[j].name);
             columnTitle.change(function(){relation.setColumnName(columns[closJ], columnTitle.val()); RecorderUI.updateDisplayedScript();});
-            
-            var columnScraped = $("<input type='checkbox'>");
-            columnScraped.prop( "checked", relation.isColumnUsed(columns[j]));
-            columnScraped.change(function(){relation.toggleColumnUsed(columns[closJ], pub.currentHelenaProgram); RecorderUI.updateDisplayedScript();});
 
             var td = $("<td></td>");
             td.append(columnTitle);
-            td.append(columnScraped);
             tr.append(td);
           })();
         }
@@ -861,6 +874,7 @@ var RecorderUI = (function (pub) {
   };
 
   pub.updateDisplayedRelation = function _updateDisplayedRelation(relationObj){
+
     WALconsole.log("updateDisplayedRelation");
     var $relDiv = $("#new_script_content").find("#output_preview");
     $relDiv.html("");
@@ -915,13 +929,7 @@ var RecorderUI = (function (pub) {
     WALconsole.log("updateDisplayedScript");
     var program = pub.currentHelenaProgram;
     var scriptPreviewDiv = $("#new_script_content").find("#program_representation");
-    if (demoMode){
-      scriptPreviewDiv.remove();
-    }
-    else{
-      var scriptString = program.toString();
-      DOMCreationUtilities.replaceContent(scriptPreviewDiv, $("<div>"+scriptString+"</div>")); // let's put the script string in the script_preview node
-  }
+    scriptPreviewDiv.remove();
 
   // our mutation observer in the Helena base UI should now take care of this?
   /*
