@@ -333,17 +333,25 @@ var RecorderUI = (function (pub) {
     // remember, word 0 is "Helena" or we wouldn't have ended up here.
     currentWords = wordsArray.slice(1, wordsArray.length);      
 
-    for (var j = 0; j < promptsList.length; j++){ // todo: ultimately these should be ordered in a smart way    
-      var pl = promptsList[j];
-      var targetPromptObjectSegments = promptsList[j].prompt;
-      // call below returns false if the command doesn't match, a dict of parameters if it does match
-      var paramDictionary = processCommandSingleCandidatePrompt(currentWords, targetPromptObjectSegments);
-      if (paramDictionary){
-        // awesome!  we found the 
-        var progId = promptsList[j].progId;
-        console.log(progId, promptsList[j]);
-        pub.runProgramById(progId, paramDictionary);
-        return true;
+    for (var j = 0; j < promptsList.length; j++){ // todo: ultimately these should be ordered in a smart way 
+      try{    
+        var pl = promptsList[j];
+        var targetPromptObjectSegments = promptsList[j].prompt;
+        // call below returns false if the command doesn't match, a dict of parameters if it does match
+        var paramDictionary = processCommandSingleCandidatePrompt(currentWords, targetPromptObjectSegments);
+        if (paramDictionary){
+          // awesome!  we found the 
+          var progId = promptsList[j].progId;
+          console.log(progId, promptsList[j]);
+          pub.runProgramById(progId, paramDictionary);
+          return true;
+        }
+      } 
+      catch(err){
+        // sometimes we'll try to use an old program that was saved with an earlier version
+        // (and that has constructs we no longer allow)
+        // in those cases, should just move right along, because we can't run that program anyway
+        WALconsole.log(err);
       }
     }
     // never managed to find a matching command.  return false
@@ -1276,13 +1284,13 @@ var RecorderUI = (function (pub) {
 
   pub.newBlocklyBlockDraggedIn = function _newBlocklyBlockDraggedIn(blocklyBlock){
     // if we don't even have a helena program right now, go ahead and just make a new one
-    if (pub.currentHelenaProgram.statements.length === 0 && blocklyBlock.WALStatement){
+    if (pub.currentHelenaProgram.statements.length === 0 && WebAutomationLanguage.hasWAL(blocklyBlock)){
       // going to make a new program based on this new statement just dragged in, since the prior prog was empty
       // but remember we may already have set parameters and trigger phrase for the nonexistant one
       var priorAssociatedString = pub.currentHelenaProgram.getAssociatedString();
       var priorAssociatedVarNames = pub.currentHelenaProgram.getParameterNames();
       // make a new program with the new statement
-      setCurrentProgram(new WebAutomationLanguage.Program([blocklyBlock.WALStatement], false), []);
+      setCurrentProgram(new WebAutomationLanguage.Program([WebAutomationLanguage.getWALRep(blocklyBlock)], false), []);
       // but use the same associated string we already established
       pub.currentHelenaProgram.setAssociatedString(priorAssociatedString);
       pub.currentHelenaProgram.setParameterNames(priorAssociatedVarNames);
