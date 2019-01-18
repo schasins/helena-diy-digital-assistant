@@ -5,14 +5,20 @@
  **********************************************************************/
 
  function pretendToHear(str){
-   RecorderUI.hear(str);
+  if (str.toLowerCase().indexOf("helena") < 0){
+    console.log("Remember to preface commands with 'Helena,'");
+  }
+  var command = RecorderUI.extractHelenaCommand(str);
+  if (command){
+    RecorderUI.hear(command);
+  }
  }
 
 // this inherits from HelenaUIBase
 var RecorderUI = (function (pub) {
   pub.tabs = null;
   var ringerUseXpathFastMode = false;
-  var demoMode = true;
+  var demoMode = false;
   var runObject = null;
   pub.listen = true;
 
@@ -57,6 +63,8 @@ var RecorderUI = (function (pub) {
     recognition.onend = function(event) {
         startRecognition(recognition);
     };
+
+    setCurrentProgram(new WebAutomationLanguage.Program([], false), []);
   }
 
   $(setUp);
@@ -81,35 +89,127 @@ var RecorderUI = (function (pub) {
         pub.loadSavedScripts();
       }
     });
+
   };
 
   /**********************************************************************
    * The prompt processing code for figuring out if we're triggering an action
    **********************************************************************/
 
+  function ConcreteWords(words){
+    this.words = words;
+    this.getWords = function(){
+      return this.words;
+    };
+  }
+  function Options(setOfConcreteWordLists){
+    this.setOfConcreteWordLists = setOfConcreteWordLists;
+    this.getSetOfConcreteWordLists = function(){
+      return this.setOfConcreteWordLists;
+    };
+  }
+  function Variable(name){
+    this.name = name;
+    this.getName = function(){
+      return this.name;
+    };
+  }
+
   var promptsList = [];
   function clean(word){
     var newStr = String(word).replace(/^(\s|,|\.|'|")|(\s|,|\.|'|")+$/g, '');
     return newStr.toLowerCase();
   }
-  function makePromptStrings(plainAssociatedString){
-    if (!plainAssociatedString || plainAssociatedString === ""){
-      return [];
+  function stringToConcreteWords(str){
+    str = str.replace(/[.,\/#!?$%\^&\*;:{}=\-_`~()]/g, ''); // first remove all punctuation
+    str = str.replace(/^(\s|,|\.|'|")|(\s|,|\.|'|")+$/g, ''); // now strip off space at the end or beginning
+    if (str.length < 1){
+      return null;
     }
-    var singleWordList = plainAssociatedString.split(" ");
+    var singleWordList = str.split(" ");
     for (var i = 0; i < singleWordList.length; i++){
       singleWordList[i] = clean(singleWordList[i]);
     }
-    return[singleWordList];
+    return new ConcreteWords(singleWordList);
+  }
+  function makePromptObject(plainAssociatedString){
+    if (!plainAssociatedString || plainAssociatedString === ""){
+      return [];
+    }
+
+    // first let's try adding options
+    var segments = [];
+    var currentStringToProcess = plainAssociatedString;
+    while(true){
+      // should we introduce any options based on finding the [...] notation?
+      var optionMatch = currentStringToProcess.match(/\[(.+?)\]/);
+      // should we introduce any variables based on finding the {...} notation?
+      var variableMatch = currentStringToProcess.match(/\{(.+?)\}/);
+      if (!optionMatch && !variableMatch){
+        // no more matches.  just push the current string as the final segment
+        var concreteWordsObj = stringToConcreteWords(currentStringToProcess);
+        if (concreteWordsObj){
+          segments.push(concreteWordsObj);
+        }
+        break;
+      }
+      // ok, found a match.  let's process whichever came first
+      var match = null;
+      if (optionMatch && variableMatch){
+        if (currentStringToProcess.indexOf(optionMatch) < currentStringToProcess.indexOf(variableMatch)){
+          match = optionMatch;
+        }
+        else{
+          match = variableMatch;
+        }
+      }
+      else if (optionMatch){
+        match = optionMatch;
+      }
+      else if (variableMatch){
+        match = variableMatch;
+      }
+
+      var outerText = match[0];
+      var splitText = currentStringToProcess.split(outerText);
+      // the text before the match is just plain, so put that in
+      var concreteWordsObj = stringToConcreteWords(splitText[0]);
+      if (concreteWordsObj){
+        segments.push(concreteWordsObj);
+      }
+
+      // now let's make the next segment, which is the Options or Variable object
+      if (match === optionMatch){
+        var optionTexts = match[1].split("/");
+        var optionObjs = [];
+        for (var i = 0; i < optionTexts.length; i++){
+          var optionObj = stringToConcreteWords(optionTexts[i]); // no recursion!  all options must be plain strings.  todo: is this ok?
+          optionObjs.push(optionObj);
+        }
+        var optionsSegment = new Options(optionObjs);
+        segments.push(optionsSegment);
+      }
+      else{
+        // ok, it's the variable version, so it's pretty simple
+        var variableSegment = new Variable(match[1]);
+        segments.push(variableSegment);
+      }
+
+      // ok, and now the new string to process is the rest of the string after the match
+      currentStringToProcess = splitText[1];
+    }
+
+    return segments;
   }
   pub.updatePromptsList = function _updatePromptsList(){
     var handler = function(response){
       promptsList = [];
       _.each(response, 
         function(prog){
-          var promptStrings = makePromptStrings(prog.associated_string);
-          for (var i = 0; i < promptStrings.length; i++){
-            promptsList.push({prompt: promptStrings[i], progId: prog.id});
+          var promptObject = makePromptObject(prog.associated_string);
+          if (promptObject.length > 0){
+            // things with zero segments will just match everything, which we never want -- don't want to just always run one command...
+            promptsList.push({prompt: promptObject, progId: prog.id});
           }
         });
       console.log("promptsList", promptsList);
@@ -140,39 +240,173 @@ var RecorderUI = (function (pub) {
   pub.hear = function _hear(words){
     return pub.processCommand(words);
   }
+
+  function processCommandSingleCandidatePrompt(wordsArray, targetPromptObjectSegments, topLevel){
+    if (topLevel === undefined){ topLevel = true; }
+    if (targetPromptObjectSegments.length === 0){
+      // saying it's a match for empty segments is only ok if we've gotten here from recursion
+      // and if there aren't any more words to eat
+      return topLevel === false && wordsArray.length === 0; 
+    }
+    var currentWords = wordsArray;
+    var correctCommand = true;
+    var variablesMapping = {};
+    for (var k = 0; k < targetPromptObjectSegments.length; k++){
+      var skipForwardXWords = null;
+      if (targetPromptObjectSegments[k] instanceof ConcreteWords){
+        var targetWords = targetPromptObjectSegments[k].getWords();
+        var matchSoFar = findPhraseAtStart(targetWords, currentWords);
+        if (!matchSoFar){
+          // ok, couldn't match this segment of the current command.  break out of the segments loop and try the next command
+          correctCommand = false;
+          break;
+        }
+        else{
+          skipForwardXWords = targetWords.length;
+        }
+      }
+      else if (targetPromptObjectSegments[k] instanceof Options){
+        var targetWordOptions = targetPromptObjectSegments[k].getSetOfConcreteWordLists();
+        var foundAMatch = false;
+        for (var l = 0; l < targetWordOptions.length; l++){
+          // ok, each targetWordOption is an instance of ConcreteWords
+          var targetWords = targetWordOptions[l].getWords();
+          var matchSoFar = findPhraseAtStart(targetWords, currentWords);
+          if (matchSoFar){
+            // awesome, one of the options matched.  we're good on this segment
+            foundAMatch = true;
+            skipForwardXWords = targetWords.length;
+            break;
+          }
+        }
+        if (!foundAMatch){
+          correctCommand = false;
+          break;
+        }
+      }
+      else if (targetPromptObjectSegments[k] instanceof Variable){
+        /* ok.  this one is going to involve some ugly backtracking.  what we're going to do is
+        figure the variable better have at least one word, so we'll start by guessing it's just that one word
+        and we'll recurse and see if the remaining segments can match the rest of the text;
+        if not we'll try with 2 words, and so on, until we either find a match or reach the end
+        */
+        // todo: is it a problem that we'll have cleaned the text we'll use as the variable?  should we have kept it unclean?
+        for (var l = 1; l <= currentWords.length; l++){
+          var currentVariableWordsGuess = currentWords.slice(0,l);
+          var currentRestOfTheWordsGuess = currentWords.slice(l, currentWords.length);
+          var restOfTheSegments = targetPromptObjectSegments.slice(k + 1, targetPromptObjectSegments.length);
+          var match = processCommandSingleCandidatePrompt(currentRestOfTheWordsGuess, restOfTheSegments, false);
+          if (match){
+            // cool!  we found a match!  and because the recursion runs the rest of the segments in the loop
+            // we don't need to do it in this loop.  can just return the match
+            console.log("variable", targetPromptObjectSegments[k].getName(), currentVariableWordsGuess);
+            variablesMapping[targetPromptObjectSegments[k].getName()] = currentVariableWordsGuess;
+            for (var key in match){
+              variablesMapping[key] = match[key];
+            }
+            return variablesMapping;
+          }
+        }
+        // well drat.  we tried every combination without finding a match and returning.  so...no way to satisfy this command
+        return false;
+      }
+      else{
+        WALconsole.warn("Ended up with a prompt segment that we don't recognize!", targetPromptObjectSegments[k], promptsList[j]);
+      }
+
+      // ok, we processed this segment, which means we consumed some words.  let's go ahead and skip forward to after those
+      currentWords = currentWords.slice(skipForwardXWords, currentWords.length);
+    }
+    // cool, we made it all the way through all the segments and managed to match them all!
+    if (correctCommand){
+      // this was the right command!
+      return variablesMapping;
+    }
+  }
+
   pub.processCommand = function _processCommand(wordsArray){
+
+    var currentWords = wordsArray;
     for (var i = 0; i < wordsArray.length; i++){
       wordsArray[i] = clean(wordsArray[i]);
     }
     // remember, word 0 is "Helena" or we wouldn't have ended up here.
-    for (var j = 0; j < promptsList.length; j++){ // todo: ultimately these should be ordered in a smart way
-      var pl = promptsList[j]
-      var words = promptsList[j].prompt;
-      var correctCommand = true;
-      for (var k = 0; k < words.length; k++){
-        var promptWord = words[k];
-        if (wordsArray.length < k + 2){
-          correctCommand = false;
-          break; // wrong command
+    currentWords = wordsArray.slice(1, wordsArray.length);      
+
+    for (var j = 0; j < promptsList.length; j++){ // todo: ultimately these should be ordered in a smart way 
+      try{    
+        var pl = promptsList[j];
+        var targetPromptObjectSegments = promptsList[j].prompt;
+        // call below returns false if the command doesn't match, a dict of parameters if it does match
+        var paramDictionary = processCommandSingleCandidatePrompt(currentWords, targetPromptObjectSegments);
+        if (paramDictionary){
+          // awesome!  we found the 
+          var progId = promptsList[j].progId;
+          console.log(progId, promptsList[j]);
+          pub.runProgramById(progId, paramDictionary);
+          return true;
         }
-        var spokenWord = wordsArray[k + 1]; // k + 1 because Helena should be first word
-        if (!wordLike(promptWord, spokenWord)){
-          correctCommand = false;
-          break; // wrong command
-        }
-      }
-      if (correctCommand){
-        // we found the right command!
-        var progId = promptsList[j].progId;
-        console.log(progId, promptsList[j]);
-        pub.runProgramById(progId);
-        return true;
+      } 
+      catch(err){
+        // sometimes we'll try to use an old program that was saved with an earlier version
+        // (and that has constructs we no longer allow)
+        // in those cases, should just move right along, because we can't run that program anyway
+        WALconsole.log(err);
       }
     }
     // never managed to find a matching command.  return false
     return false;
   }
-  function extractHelenaCommand(str){
+  function findPhraseAtStart(cleanTargetWords, cleanWords){
+    if (cleanWords.length < cleanTargetWords.length){
+      return false;
+    }
+    for (var i = 0; i < cleanTargetWords.length; i++){
+      var cleanWord = cleanWords[i];
+      var cleanTargetWord = cleanTargetWords[i];
+      if (!wordLike(cleanWord, cleanTargetWord)){
+        return false;
+      }
+    }
+    return true;
+  }
+  function findInstanceOfPhrase(cleanTargetWords, cleanWords){
+    for (var i = 0; i < cleanWords.length; i++){
+      var cleanWord = cleanWords[i];
+      if (wordLike(cleanTargetWords[0], cleanWord)){
+        // ok, we've matched the first word, but need to match all the following to conclude we've found the target words
+        var foundPhrase = true;
+        for (var j = 1; j < cleanTargetWords.length; j++){
+          var cleanTargetWord = cleanTargetWords[j];
+          if ((i + j) > (cleanWords.length - 1)){
+            // we've hit the end of the candidate words without ever finding the complete target phrase.  time to fail
+            return false;
+          }
+          // we now know it's ok to index into i + j
+          var cleanWord = cleanWords[i + j];
+          if (!wordLike(cleanTargetWord, cleanWord)){
+            // no good.  we've broken the pattern, haven't found the match
+            foundPhrase = false;
+            break;
+          }
+          // so far so good.  keep going with the next iteration of the cleanTargetWords loop
+        }
+        // ok, we made it through the cleanTargetWords.  did we actually find the whole phrase?
+        if (foundPhrase){
+          // yay!  we found it!  ok, let's split the words into the pieces before, in, and after the target phrase
+          var before = cleanWords.slice(0,i);
+          var within = cleanWords.slice(i, i + cleanTargetWords.length);
+          var after = cleanWords.slice(i + cleanTargetWords.length, cleanWords.length);
+          console.log("before, within, after", before, within, after);
+          return [before, within, after];
+        }
+        // drat, didn't find the phrase.  try the next iteration of the cleanWords loop, see if the target phrase starts at the next index
+      }
+    }
+    // well drat.  we made it to the end of this loop and never found the phrase
+    return false;
+  }
+  pub.extractHelenaCommand = function(str){
     var words = str.split(" ");
     for (var i = 0; i < words.length; i++){
       var cleanWord = clean(words[i]);
@@ -188,7 +422,7 @@ var RecorderUI = (function (pub) {
     var firstHelenaCommand = null;
     for (var i = 0; i < event.results[0].length; i++){
       var text = event.results[0][i].transcript;
-      var potentialHelenaCommand = extractHelenaCommand(text);
+      var potentialHelenaCommand = pub.extractHelenaCommand(text);
       if (potentialHelenaCommand){
         if (firstHelenaCommand === null){
           firstHelenaCommand = potentialHelenaCommand;
@@ -311,16 +545,18 @@ var RecorderUI = (function (pub) {
     }
     */
 
+
+    // when the user udpates the trigger phrase, we'll need to do some special processing
+    div.find("#trigger_phrase").get(0).onchange = pub.processNewTriggerPhrase;
+
     HelenaUIBase.setUpBlocklyEditor();
 
     RecorderUI.updateDisplayedScript();
     RecorderUI.updateDisplayedRelations(inProgress);
   };
 
-  pub.run = function _run(fastMode){
-    if (fastMode === undefined){ fastMode = false;}
-    // first set the correct fast mode, which means setting it to false if we haven't gotten true passed in
-    // might still be on from last time
+  pub.run = function _run(paramDictionary){
+    if (paramDictionary === undefined){ paramDictionary = {}; }
 
     if (!pub.currentHelenaProgram){
       WALconsole.warn("Tried to run program before we have a program to run.");
@@ -332,7 +568,7 @@ var RecorderUI = (function (pub) {
 
     // trying something new.  have running just always save the thing.  otherwise, it's so unpredictable
     // we're not really doing output stuff, so is it ok to run without saving/getting a prog id?  todo: check
-    pub.currentHelenaProgram.run({}, function(){}, false);
+    pub.currentHelenaProgram.run({}, function(){}, paramDictionary, false);
   };
 
   var scriptRunCounter = 0;
@@ -343,13 +579,37 @@ var RecorderUI = (function (pub) {
     runObject = rObj;
   };
 
+  pub.processNewTriggerPhrase = function _processNewTriggerPhrase(){
+    var div = $("#new_script_content");
+    var prog = pub.currentHelenaProgram;
+
+    var triggerPhraseInputNode = div.find("#trigger_phrase").get(0);
+    var triggerPhraseString = triggerPhraseInputNode.value;
+    prog.setAssociatedString(triggerPhraseString);
+    console.log("Current trigger phrase", triggerPhraseString);
+    var re = /\{(.+?)\}/g;
+    var match = null;
+    var variableNames = [];
+    while (match = re.exec(triggerPhraseString)) {
+      console.log(match[1], match[2]);
+      variableNames.push(match[1]);
+    }
+    console.log("parameter names", variableNames);
+    var priorParameterNames = prog.getParameterNames();
+    if (!_.isEqual(priorParameterNames, variableNames)){
+      prog.setParameterNames(variableNames);
+      // now that we've set new variable names, the blockly blocks should be udpated to reflect that
+      pub.updateDisplayedScript();
+    }
+  }
+
   // for saving a program to the server
   pub.save = function _save(postIdRetrievalContinuation){
     var prog = pub.currentHelenaProgram;
     var div = $("#new_script_content");
     var name = div.find("#program_name").get(0).value;
     prog.setName(name);
-    var triggerPhraseInputNode = div.find("#trigger_phrase").get(0)
+    var triggerPhraseInputNode = div.find("#trigger_phrase").get(0);
     if (triggerPhraseInputNode.value === triggerPhraseInputNode.defaultValue){
       // it's all well and good to have the default program name, since that doesn't matter
       // but you really need to have a good trigger phrase
@@ -358,8 +618,6 @@ var RecorderUI = (function (pub) {
         {"OK":function(){}});
       return
     }
-    prog.setAssociatedString(triggerPhraseInputNode.value);
-    console.log("Current trigger phrase", triggerPhraseInputNode.value);
 
     // ok, time to call the func that actually interacts with the server
     // saveToServer(progName, postIdRetrievalContinuation, saveStartedHandler, saveCompletedHandler)
@@ -456,28 +714,43 @@ var RecorderUI = (function (pub) {
   }
 
   pub.updateDisplayedRelations = function _updateDisplayedRelations(currentlyUpdating){
-    WALconsole.log("updateDisplayedRelation");
-    if (currentlyUpdating === undefined){ currentlyUpdating = false; }
-
     if (!pub.currentHelenaProgram){
       WALconsole.warn("Tried to call updateDisplayedRelations before setting pub.currentHelenaProgram.");
       return;
     }
+    WALconsole.log("updateDisplayedRelation");
+    if (currentlyUpdating === undefined){ currentlyUpdating = false; }
 
     var relationObjects = pub.currentHelenaProgram.relations;
     var $div = $("#new_script_content").find("#status_message");
     $div.html("");
+    var $overlay = $("#overlay");
+    var $overlaytext = $overlay.find("#overlay_text");
     if (currentlyUpdating){
-      $div.html("Looking at webpages to find relevant tables.  Give us a moment.<br><center><img src='../icons/ajax-loader.gif'></center>");
-      var giveUpButton = $("<button>Give up looking for relevant tables.</button>");
-      giveUpButton.button();
-      giveUpButton.click(function(){
-        pub.currentHelenaProgram.insertLoops(true); // if user thinks we won't have relations, go ahead and do prog processing (making loopyStatements) without them
-      });
-      $div.append(giveUpButton);
+      $overlaytext.html("<center><img src='../icons/ajax-loader.gif'><br>Looking at webpages to find relevant tables.  Give us a moment.<br></center>");
+      
+      if (!demoMode){
+        var giveUpButton = $("<button>Give up looking for relevant tables.</button>");
+        giveUpButton.button();
+        giveUpButton.click(function(){
+          pub.currentHelenaProgram.insertLoops(true); // if user thinks we won't have relations, go ahead and do prog processing (making loopyStatements) without them
+          // and let's prevent future guessed relations from messing us up
+          pub.currentHelenaProgram.forbidAutomaticLoopInsertion();
+        });
+        $overlaytext.append(giveUpButton);
+
+        var giveUpButton2 = $("<button>Give up ON THIS CURRENT PAGE (and continue to next page).</button>");
+        giveUpButton2.button();
+        giveUpButton2.click(function(){
+          currentSkipper(); // this gets updated by handleFunctionForSkippingToNextPageOfRelationFinding above
+        });
+        $overlaytext.append(giveUpButton2);
+      }
+
+      $overlay.css("display", "inline");
     }
     else{
-      $div.html("");
+      $overlay.css("display", "none");
     }
 
     $div = $("#new_script_content").find("#relations");
@@ -508,14 +781,9 @@ var RecorderUI = (function (pub) {
             var columnTitle = $("<input></input>");
             columnTitle.val(columns[j].name);
             columnTitle.change(function(){relation.setColumnName(columns[closJ], columnTitle.val()); RecorderUI.updateDisplayedScript();});
-            
-            var columnScraped = $("<input type='checkbox'>");
-            columnScraped.prop( "checked", relation.isColumnUsed(columns[j]));
-            columnScraped.change(function(){relation.toggleColumnUsed(columns[closJ], pub.currentHelenaProgram); RecorderUI.updateDisplayedScript();});
 
             var td = $("<td></td>");
             td.append(columnTitle);
-            td.append(columnScraped);
             tr.append(td);
           })();
         }
@@ -614,6 +882,7 @@ var RecorderUI = (function (pub) {
   };
 
   pub.updateDisplayedRelation = function _updateDisplayedRelation(relationObj){
+
     WALconsole.log("updateDisplayedRelation");
     var $relDiv = $("#new_script_content").find("#output_preview");
     $relDiv.html("");
@@ -668,13 +937,7 @@ var RecorderUI = (function (pub) {
     WALconsole.log("updateDisplayedScript");
     var program = pub.currentHelenaProgram;
     var scriptPreviewDiv = $("#new_script_content").find("#program_representation");
-    if (demoMode){
-      scriptPreviewDiv.remove();
-    }
-    else{
-      var scriptString = program.toString();
-      DOMCreationUtilities.replaceContent(scriptPreviewDiv, $("<div>"+scriptString+"</div>")); // let's put the script string in the script_preview node
-  }
+    scriptPreviewDiv.remove();
 
   // our mutation observer in the Helena base UI should now take care of this?
   /*
@@ -1007,9 +1270,10 @@ var RecorderUI = (function (pub) {
     HelenaServerInteractions.loadSavedProgram(progId, handler);
   };
 
-  pub.runProgramById = function _runProgramById(progId){
+  pub.runProgramById = function _runProgramById(progId, paramDictionary){
+    if (paramDictionary === undefined){ paramDictionary = {};}
     pub.loadSavedProgram(progId, function(){
-      pub.run();
+      pub.run(paramDictionary);
     })
   };
 
@@ -1020,8 +1284,16 @@ var RecorderUI = (function (pub) {
 
   pub.newBlocklyBlockDraggedIn = function _newBlocklyBlockDraggedIn(blocklyBlock){
     // if we don't even have a helena program right now, go ahead and just make a new one
-    if (!pub.currentHelenaProgram && blocklyBlock.WALStatement){
-      pub.currentHelenaProgram = new WebAutomationLanguage.Program([blocklyBlock.WALStatement], false);
+    if (pub.currentHelenaProgram.statements.length === 0 && WebAutomationLanguage.hasWAL(blocklyBlock)){
+      // going to make a new program based on this new statement just dragged in, since the prior prog was empty
+      // but remember we may already have set parameters and trigger phrase for the nonexistant one
+      var priorAssociatedString = pub.currentHelenaProgram.getAssociatedString();
+      var priorAssociatedVarNames = pub.currentHelenaProgram.getParameterNames();
+      // make a new program with the new statement
+      setCurrentProgram(new WebAutomationLanguage.Program([WebAutomationLanguage.getWALRep(blocklyBlock)], false), []);
+      // but use the same associated string we already established
+      pub.currentHelenaProgram.setAssociatedString(priorAssociatedString);
+      pub.currentHelenaProgram.setParameterNames(priorAssociatedVarNames);
     }
   };
 
