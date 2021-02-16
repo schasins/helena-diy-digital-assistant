@@ -9,6 +9,7 @@
     console.log("Remember to preface commands with 'Helena,'");
   }
   var command = RecorderUI.extractHelenaCommand(str);
+  console.log("command", command);
   if (command){
     RecorderUI.hear(command);
   }
